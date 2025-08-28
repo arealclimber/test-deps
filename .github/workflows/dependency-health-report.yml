@@ -1,0 +1,283 @@
+name: 'Weekly Dependency Health Report'
+
+on:
+  schedule:
+    # Run every Monday at 02:00 UTC (11:00 Taipei time)
+    - cron: '0 2 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: read
+  issues: write
+  security-events: read
+
+jobs:
+  dependency-health-report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install analysis tools
+        run: |
+          npm install -g npm-check-updates depcheck npm-audit-resolver
+          
+      - name: Generate outdated packages report
+        run: |
+          echo "# 📦 Weekly Dependency Health Report" > dependency-report.md
+          echo "" >> dependency-report.md
+          echo "**Generated on:** $(date)" >> dependency-report.md
+          echo "**Branch:** ${{ github.ref_name }}" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          echo "## 🔄 Outdated Dependencies" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          # Get outdated packages
+          if npm outdated --json > outdated.json 2>/dev/null; then
+            if [ -s outdated.json ] && [ "$(cat outdated.json)" != "{}" ]; then
+              echo "The following packages have newer versions available:" >> dependency-report.md
+              echo "" >> dependency-report.md
+              echo "| Package | Current | Wanted | Latest | Type |" >> dependency-report.md
+              echo "|---------|---------|--------|--------|------|" >> dependency-report.md
+              
+              # Parse JSON and create table
+              node -e "
+                const outdated = JSON.parse(require('fs').readFileSync('outdated.json', 'utf8'));
+                Object.entries(outdated).forEach(([pkg, info]) => {
+                  const type = info.type || 'dependencies';
+                  console.log(\`| \${pkg} | \${info.current} | \${info.wanted} | \${info.latest} | \${type} |\`);
+                });
+              " >> dependency-report.md
+            else
+              echo "✅ All dependencies are up to date!" >> dependency-report.md
+            fi
+          else
+            echo "❌ Could not check for outdated dependencies." >> dependency-report.md
+          fi
+          echo "" >> dependency-report.md
+
+      - name: Security vulnerability audit
+        run: |
+          echo "## 🔒 Security Vulnerabilities" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          if npm audit --json > audit.json 2>/dev/null; then
+            # Parse audit results
+            VULNERABILITIES=$(node -e "
+              try {
+                const audit = JSON.parse(require('fs').readFileSync('audit.json', 'utf8'));
+                const meta = audit.metadata || {};
+                const vulns = meta.vulnerabilities || {};
+                
+                const total = Object.values(vulns).reduce((sum, count) => sum + count, 0);
+                
+                if (total === 0) {
+                  console.log('✅ No known security vulnerabilities found!');
+                } else {
+                  console.log(\`⚠️ Found \${total} vulnerabilities:\`);
+                  console.log('');
+                  if (vulns.critical) console.log(\`- **Critical:** \${vulns.critical}\`);
+                  if (vulns.high) console.log(\`- **High:** \${vulns.high}\`);
+                  if (vulns.moderate) console.log(\`- **Moderate:** \${vulns.moderate}\`);
+                  if (vulns.low) console.log(\`- **Low:** \${vulns.low}\`);
+                  console.log('');
+                  console.log('Run \`npm audit fix\` to attempt automatic fixes.');
+                }
+              } catch (e) {
+                console.log('❌ Could not parse audit results.');
+              }
+            ")
+            echo "$VULNERABILITIES" >> dependency-report.md
+          else
+            echo "❌ Could not perform security audit." >> dependency-report.md
+          fi
+          echo "" >> dependency-report.md
+
+      - name: Check for unused dependencies
+        run: |
+          echo "## 🧹 Unused Dependencies Analysis" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          if npx depcheck --json > depcheck.json 2>/dev/null; then
+            UNUSED_DEPS=$(node -e "
+              try {
+                const result = JSON.parse(require('fs').readFileSync('depcheck.json', 'utf8'));
+                
+                if (result.dependencies && result.dependencies.length > 0) {
+                  console.log('**Potentially unused dependencies:**');
+                  console.log('');
+                  result.dependencies.forEach(dep => console.log(\`- \${dep}\`));
+                  console.log('');
+                } else {
+                  console.log('✅ No unused dependencies detected.');
+                  console.log('');
+                }
+                
+                if (result.devDependencies && result.devDependencies.length > 0) {
+                  console.log('**Potentially unused dev dependencies:**');
+                  console.log('');
+                  result.devDependencies.forEach(dep => console.log(\`- \${dep}\`));
+                  console.log('');
+                }
+                
+                if (result.missing && Object.keys(result.missing).length > 0) {
+                  console.log('**Missing dependencies (used but not declared):**');
+                  console.log('');
+                  Object.entries(result.missing).forEach(([dep, files]) => {
+                    console.log(\`- **\${dep}** (used in \${files.length} files)\`);
+                  });
+                  console.log('');
+                }
+              } catch (e) {
+                console.log('❌ Could not analyze unused dependencies.');
+              }
+            ")
+            echo "$UNUSED_DEPS" >> dependency-report.md
+          else
+            echo "❌ Could not check for unused dependencies." >> dependency-report.md
+          fi
+
+      - name: Dependency size analysis
+        run: |
+          echo "## 📊 Dependency Statistics" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          # Count dependencies
+          TOTAL_DEPS=$(node -e "
+            const pkg = JSON.parse(require('fs').readFileSync('package.json', 'utf8'));
+            const deps = Object.keys(pkg.dependencies || {}).length;
+            const devDeps = Object.keys(pkg.devDependencies || {}).length;
+            console.log(\`- **Production dependencies:** \${deps}\`);
+            console.log(\`- **Development dependencies:** \${devDeps}\`);
+            console.log(\`- **Total:** \${deps + devDeps}\`);
+          ")
+          echo "$TOTAL_DEPS" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          # Node modules size (if available)
+          if [ -d "node_modules" ]; then
+            SIZE=$(du -sh node_modules 2>/dev/null | cut -f1 || echo "Unknown")
+            echo "- **node_modules size:** $SIZE" >> dependency-report.md
+            echo "" >> dependency-report.md
+          fi
+
+      - name: Generate recommendations
+        run: |
+          echo "## 💡 Recommendations" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          # Check for high-risk updates
+          if [ -f outdated.json ] && [ -s outdated.json ] && [ "$(cat outdated.json)" != "{}" ]; then
+            HIGH_RISK_UPDATES=$(node -e "
+              try {
+                const outdated = JSON.parse(require('fs').readFileSync('outdated.json', 'utf8'));
+                const highRisk = ['typescript', 'next', 'react', 'react-dom', '@types/node'];
+                
+                const foundHighRisk = [];
+                Object.keys(outdated).forEach(pkg => {
+                  if (highRisk.some(risk => pkg.includes(risk))) {
+                    foundHighRisk.push(pkg);
+                  }
+                });
+                
+                if (foundHighRisk.length > 0) {
+                  console.log('⚠️ **High-risk dependency updates detected:**');
+                  console.log('');
+                  foundHighRisk.forEach(pkg => {
+                    console.log(\`- \${pkg} - Check Canary results before updating\`);
+                  });
+                  console.log('');
+                  console.log('Consider running manual tests before updating these dependencies.');
+                  console.log('');
+                }
+              } catch (e) {
+                // Ignore parsing errors
+              }
+            ")
+            echo "$HIGH_RISK_UPDATES" >> dependency-report.md
+          fi
+          
+          echo "### 🔄 Next Steps" >> dependency-report.md
+          echo "" >> dependency-report.md
+          echo "1. **Review outdated dependencies** - Consider updating non-critical packages first" >> dependency-report.md
+          echo "2. **Address security vulnerabilities** - Run \`npm audit fix\` for automatic fixes" >> dependency-report.md
+          echo "3. **Check Renovate PRs** - Review and merge pending Renovate pull requests" >> dependency-report.md
+          echo "4. **Monitor Canary results** - Check latest Canary test results for major updates" >> dependency-report.md
+          echo "5. **Clean up unused dependencies** - Remove packages that are no longer needed" >> dependency-report.md
+          echo "" >> dependency-report.md
+          
+          echo "---" >> dependency-report.md
+          echo "" >> dependency-report.md
+          echo "*This report is automatically generated every Monday. For questions or issues, please contact the dependency management team.*" >> dependency-report.md
+
+      - name: Find existing health report issue
+        id: find-issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['dependency-health', 'weekly-report'],
+              state: 'open'
+            });
+            
+            const existingIssue = issues.data.find(issue => 
+              issue.title.includes('Weekly Dependency Health Report')
+            );
+            
+            return existingIssue ? existingIssue.number : null;
+
+      - name: Create or update health report issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reportContent = fs.readFileSync('dependency-report.md', 'utf8');
+            
+            const issueNumber = ${{ steps.find-issue.outputs.result }};
+            
+            const issueBody = reportContent + `
+            
+            ---
+            *This issue is automatically updated every Monday by the Dependency Health Report workflow.*
+            *Last updated: ${new Date().toISOString()}*
+            `;
+            
+            if (issueNumber) {
+              // Update existing issue
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                body: issueBody
+              });
+              console.log(`Updated existing health report issue #${issueNumber}`);
+            } else {
+              // Create new issue
+              const newIssue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '📦 Weekly Dependency Health Report',
+                body: issueBody,
+                labels: ['dependency-health', 'weekly-report', 'maintenance']
+              });
+              console.log(`Created new health report issue #${newIssue.data.number}`);
+            }
+
+      - name: Upload report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-health-report
+          path: dependency-report.md
+          retention-days: 30

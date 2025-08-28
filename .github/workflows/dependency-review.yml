@@ -1,0 +1,23 @@
+# .github/workflows/dependency-review.yml
+name: Dependency Review
+on:
+  pull_request:
+    branches: [ main, develop ]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: critical
+          vulnerability-check: true
+          license-check: true
+          comment-summary-in-pr: on-failure
+          # （選配）忽略個別套件的授權檢查：使用 purl
+          allow-dependencies-licenses: >
+            pkg:npm/%40types/node@22.4.2,
+            pkg:npm/lodash@4.17.21
