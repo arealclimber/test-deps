@@ -6,7 +6,7 @@
     ":timezone(Asia/Taipei)",
     ":assignee(arealclimber)"
   ],
-  "schedule": ["before 10am on monday"],
+  "schedule": ["at any time"],
   "prConcurrentLimit": 10,
   "prHourlyLimit": 3,
   "rangeStrategy": "pin",
@@ -38,7 +38,7 @@
       "description": "TypeScript and Next.js major updates - Monthly schedule",
       "matchPackageNames": ["typescript", "next"],
       "matchUpdateTypes": ["major"],
-      "schedule": ["on the first day of the month"],
+      "schedule": ["at any time"],
       "labels": ["major-update", "typescript", "needs-canary-check"],
       "prBodyTemplate": "⚠️ Major update detected. Please check Canary results before merging.\n\n{{{body}}}"
     },
@@ -104,7 +104,7 @@
   ],
   "lockFileMaintenance": {
     "enabled": true,
-    "schedule": ["before 10am on monday"],
+    "schedule": ["at any time"],
     "commitMessageAction": "Lock file maintenance",
     "labels": ["lockfile-maintenance"]
   },
